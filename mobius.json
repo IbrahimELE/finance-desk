@@ -1,0 +1,77 @@
+{
+  "id": "finance-desk",
+  "name": "Finance Desk",
+  "version": "0.2.1",
+  "description": "AI stock research briefs, live charts, paper trading and a leaderboard shared by Möbius players.",
+  "author": "IbrahimELE, mfehric",
+  "license": "MIT",
+  "homepage": "https://github.com/IbrahimELE/MobiusFinance",
+  "entry": "index.jsx",
+  "icon": "icon.png",
+  "offline_capable": false,
+  "permissions": {
+    "identity_manage": true
+  },
+  "service": {
+    "id": "finance-desk",
+    "entry": "service.py",
+    "access": "public"
+  },
+  "python": {
+    "lock": "requirements.lock"
+  },
+  "source_files": [
+    "runtime.js",
+    "ui_css.js",
+    "ui_markup.js",
+    "ui_desk.js",
+    "vendor/lightweight-charts.js",
+    "service.py",
+    "fd_desk.py",
+    "fd_compete.py",
+    "fd_catalog.py",
+    "fd_crypto.py",
+    "catalog/sec_tickers.snapshot.json",
+    "catalog/markets.snapshot.json",
+    "catalog/crypto.snapshot.json",
+    "competition.js",
+    "fd_fed/__init__.py",
+    "fd_fed/net_utils.py",
+    "fd_fed/dns_resolver.py",
+    "fd_fed/peer_transport.py",
+    "requirements.lock",
+    "fd_data/__init__.py",
+    "fd_data/cache.py",
+    "fd_data/config.py",
+    "fd_data/leaderboard.py",
+    "fd_data/models.py",
+    "fd_data/paper.py",
+    "fd_data/service.py",
+    "fd_data/providers/__init__.py",
+    "fd_data/providers/base.py",
+    "fd_data/providers/edgar_provider.py",
+    "fd_data/providers/yfinance_provider.py",
+    "fd_learning/__init__.py",
+    "fd_learning/llm.py",
+    "fd_learning/models.py",
+    "fd_learning/rules.py",
+    "fd_learning/service.py",
+    "fd_learning/store.py"
+  ],
+  "store": {
+    "tagline": "AI stock briefs, live charts and a paper-trading league with other Möbius players.",
+    "description": "Type a ticker and Finance Desk pulls the live price, the key financials and the risk section of the company's latest annual report (10-K). An AI analyst turns it into a short brief, and every claim links to Yahoo Finance or the SEC filing so you can check it.\n\nPractise with $100,000 of virtual money: buy and sell at live prices, follow your positions and set price alerts on your watchlist. Don't know a ticker? Browse today's most active stocks, top gainers and losers, sectors and crypto.\n\nJoin the shared leaderboard to compete with other Möbius players under your @handle. Your competition account is separate from your practice workspaces, trades fill at the host's price and there are no resets. Players are ranked by money made per day, week and month.\n\nAI briefs use your own Möbius AI model. Market data comes from Yahoo Finance and SEC EDGAR, so an internet connection is required. Virtual money only, not investment advice.",
+    "screenshots": [
+      {
+        "src": "static/store/home.png",
+        "alt": "Finance Desk home with stock search, example tickers and an introduction to AI research briefs and virtual trading.",
+        "label": "Research any stock"
+      },
+      {
+        "src": "static/store/markets.png",
+        "alt": "Markets view showing today's most active stocks, top gainers and top losers with public market prices.",
+        "label": "Browse today's markets"
+      }
+    ]
+  }
+}

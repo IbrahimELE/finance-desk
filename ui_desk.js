@@ -188,7 +188,7 @@ async function refreshQuote(){if(!cur)return;const b=cur;
   }catch(e){setLive(null)}}
 const LIVE_MS=10000;
 let tickN=0;
-async function tick(){if(document.hidden)return;if(cur&&$("px"))await refreshQuote();paperUI();if(++tickN%2===0)refreshWatch();if(tickN%4===0)lbUI();if(mkOpen&&tickN%(mkMode=="crypto"?3:6)===0)loadMarkets()}
+async function tick(){if(document.hidden)return;if(cur&&$("px"))await refreshQuote();if(acct!="compete"||++gTick%3===0)paperUI();if(++tickN%2===0)refreshWatch();if(tickN%4===0)lbUI();if(mkOpen&&tickN%(mkMode=="crypto"?3:6)===0)loadMarkets()}
 every(tick,LIVE_MS);onVisible(()=>{if(!document.hidden)tick()});
 
 /* ---------- learning ---------- */
@@ -244,6 +244,15 @@ $("cmp").onclick=async()=>{const s=[...document.querySelectorAll("#saved input:c
 
 /* ---------- paper trading: cash is the headline, every order is confirmed ---------- */
 const actKey=()=>"fills:"+P,acts=()=>JSON.parse(localStorage[actKey()]||"[]");
+/* Two accounts can share this card: "practice" (per workspace, resettable) and, where the server offers the
+   shared competition (feat.competition, Möbius only), "compete": kept by the competition host per @handle,
+   no resets. Same form, same order types; only the account differs. */
+let acct=localStorage.acct=="compete"?"compete":"practice",gctx=null,gTick=0;
+const rid=()=>crypto.randomUUID?crypto.randomUUID():`${Date.now().toString(16)}-${Math.random().toString(16).slice(2,14)}`;
+const gc=(a,b={})=>post("/compete/"+a,{...b,request_id:rid()});
+const competeChanged=()=>document.dispatchEvent(new CustomEvent("fd:compete-changed"));
+function setAcct(m){if(m===acct)return;acct=m;localStorage.acct=m;lastPf=null;pfSeq++;renderPaper();paperUI()}
+document.addEventListener("fd:account",e=>{setAcct(e.detail);$("paper")?.scrollIntoView({behavior:"smooth",block:"start"})});
 let lastPf=null,pfSeq=0,qtyVals={stock:"10",crypto:"0.1"},otype="market",lpxVal="",lpxFor="",heldRender=false;const QUICK=[10,20,50,100],QUICK_C=[0.01,0.1,0.5,1];
 const OTYPES=[["market","Market"],["limit","Limit"],["stop","Stop-loss"]],TLABEL={market:"Market",limit:"Limit",stop:"Stop-loss"};
 const editing=()=>["qty","lpx"].includes(document.activeElement&&document.activeElement.id);
@@ -251,35 +260,48 @@ function noticeFills(prev,p){/* an open order that disappeared and shows up in r
   if(!prev||prev.project_id!==p.project_id)return;const now=new Set((p.open_orders||[]).map(o=>o.id));
   for(const o of prev.open_orders||[]){if(now.has(o.id))continue;const f=(p.recent_orders||[]).find(r=>r.ticker==o.ticker&&r.side==o.side&&r.qty==o.qty&&r.type==o.type);
     if(f)toast(`🔔 ${TLABEL[o.type]} order filled: ${o.side=="buy"?"bought":"sold"} ${fmtQty(f.qty)} ${esc(f.ticker)} at ${usd(f.price)}`,"ok")}}
-async function paperUI(){if(!feat.paper)return;const seq=++pfSeq;
-  try{const p=await J("/paper/portfolio?project_id="+encodeURIComponent(P));if(seq!==pfSeq)return;noticeFills(lastPf,p);lastPf=p;renderPaper()}
-  catch(e){if(seq===pfSeq&&!lastPf)$("paper").hidden=true}}
-function renderPaper(){if(!feat.paper)return;const p=lastPf;$("paper").hidden=false;
+async function paperUI(){if(!feat.paper)return;if(!feat.competition)acct="practice";const seq=++pfSeq,mode=acct;
+  try{let p;if(mode=="compete"){if(!gctx)gctx=await J("/compete/context");p=await gc("portfolio")}
+    else p=await J("/paper/portfolio?project_id="+encodeURIComponent(P));
+    if(seq!==pfSeq||mode!==acct)return;noticeFills(lastPf,p);lastPf=p;renderPaper()}
+  catch(e){if(seq!==pfSeq||mode!==acct)return;
+    if(mode=="compete"){if(!lastPf||lastPf.problem){lastPf={problem:e.message,joinable:/join the competition/i.test(e.message)};renderPaper()}}
+    else if(!lastPf)$("paper").hidden=true}}
+function renderPaper(){if(!feat.paper)return;const p=lastPf,G=acct=="compete";$("paper").hidden=false;
   if(editing()){heldRender=true;return}heldRender=false;   /* don't yank an input away while someone is typing in it */
-  if(!p){$("pf").innerHTML='<div class="loading"><div class="spinner"></div><span class="muted">Loading your paper account…</span></div>';return}
+  const pill=$("paper").querySelector(".pill");if(pill)pill.textContent=G?"No resets":"Virtual money";
+  const sw=feat.competition?`<div class="tabs acct-sw" role="tablist" aria-label="Account">${[["practice","Practice"],["compete","Competition"]].map(([k,n])=>`<button role="tab" data-acct="${k}" class="${acct==k?"on":""}" aria-selected="${acct==k}">${n}</button>`).join("")}</div>`:"";
+  const who=!feat.competition?"":G?`<div class="acct-who">${gctx?`Playing as <b>${esc(gctx.handle)}</b> against every Finance Desk player`:"The global competition"}</div>`:`<div class="acct-who">Workspace <b>${esc(P)}</b> · practise freely, reset any time</div>`;
+  if(!p){$("pf").innerHTML=sw+who+`<div class="loading"><div class="spinner"></div><span class="muted">${G?"Connecting to the competition…":"Loading your paper account…"}</span></div>`;return}
+  if(p.problem){$("pf").innerHTML=sw+who+(p.joinable
+      ?`<p style="margin:0 0 12px">Trade a separate <b>$100,000</b> account against every Finance Desk player on Möbius. It has the same order types as practice, but no resets, so the ranking is fair.</p><button class="btn primary" id="gjoin" style="width:100%">Join${gctx?" as "+esc(gctx.handle):""}</button>`
+      :`<p class="muted" style="margin:0 0 12px">${esc(p.problem)}</p><button class="btn ghost sm" id="gretry">Try again</button>`);return}
   const invested=p.positions.reduce((s,x)=>s+x.market_value,0),t=cur?cur.ticker:"",pos=p.positions.find(x=>x.ticker==t);
   const priced=!!(lastQuote&&cur&&lastQuote.ticker==t),px=priced?lastQuote.price:null,free=pos?pos.qty-(pos.reserved_qty||0):0;
   const cq=isCrypto(t),qk=cq?"crypto":"stock",unit=cq?"coins":"shares";
   if(lpxFor!==t){lpxVal=px?String(+px.toFixed(2)):"";lpxFor=px?t:""}   /* set price starts at the live price for each stock */
+  /* the competition host lists the order types it fills; an older host knows only market orders */
+  const okType=k=>!G||(p.order_types||["market"]).includes(k);if(!okType(otype))otype="market";
   const reserved=p.reserved_cash||0,opens=p.open_orders||[],recent=p.recent_orders||acts();
-  $("pf").innerHTML=`<small class="muted" style="font-weight:600">Cash available</small><div class="cash" id="cashv">${usd(p.cash)}</div>
+  $("pf").innerHTML=sw+who+`<small class="muted" style="font-weight:600">Cash available</small><div class="cash" id="cashv">${usd(p.cash)}</div>
   ${reserved>0?`<div class="muted" style="font-size:13px;margin-top:-2px">+ ${usd(reserved)} reserved for open buy orders</div>`:""}
   <div class="acct-grid"><div><small>Invested</small><b>${usd(invested)}</b></div><div><small>Total value</small><b>${usd(p.equity)}</b></div>
     <div><small>Profit / loss</small><b class="${cls(p.pnl)}">${signed(p.pnl,usd)}</b></div><div><small>Return</small><b class="${cls(p.pnl)}">${signed(p.pnl/p.starting_cash*100||0,v=>v.toFixed(2))}%</b></div></div>
   ${t?`<div class="trade"><div style="margin-bottom:8px"><b>Trade ${esc(t)}</b><div class="muted" style="font-size:13px">${priced?usd(px)+(cq?" per coin":" per share"):'<span class="loading" style="display:inline-flex;gap:6px"><span class="spinner" style="width:12px;height:12px;border-width:2px"></span>Getting live price…</span>'}${pos?` · you own ${fmtQty(pos.qty)}${pos.reserved_qty?` (${fmtQty(pos.reserved_qty)} in open orders)`:""}`:""}</div></div>
-    <div class="tabs otype" role="tablist" aria-label="Order type">${OTYPES.map(([k,n])=>`<button role="tab" data-ot="${k}" class="${otype==k?"on":""}" aria-selected="${otype==k}">${n}</button>`).join("")}</div>
+    <div class="tabs otype" role="tablist" aria-label="Order type">${OTYPES.map(([k,n])=>`<button role="tab" data-ot="${k}" class="${otype==k?"on":""}" aria-selected="${otype==k}" ${okType(k)?"":'disabled title="The competition host has not been updated for this order type yet"'}>${n}</button>`).join("")}</div>
+    ${OTYPES.some(([k])=>!okType(k))?'<div class="note" style="margin:-2px 0 8px">Limit and stop-loss open in the competition once its host runs the latest Finance Desk.</div>':""}
     ${otype!="market"?`<label class="lpx"><span>${otype=="limit"?"Limit price":"Stop price"}</span><span class="box">$<input id="lpx" type="number" min="0.01" step="0.01" inputmode="decimal" value="${esc(lpxVal)}" aria-label="${otype=="limit"?"Limit price":"Stop price"}"></span></label>`:""}
     <div class="row"><div class="stepper"><button data-q="-1" aria-label="Fewer shares">−</button><input id="qty" type="number" min="${cq?"0.000001":"1"}" step="${cq?"any":"1"}" inputmode="decimal" value="${esc(qtyVals[qk])}" aria-label="${cq?"Amount in coins":"Shares"}"><button data-q="1" aria-label="More shares">+</button></div>
     <button class="btn success sm" data-s="buy" style="flex:1" ${priced&&otype!="stop"?"":"disabled"} ${otype=="stop"?'title="A stop-loss sells shares you own"':""}>Buy</button><button class="btn danger sm" data-s="sell" style="flex:1" ${priced&&free>0?"":"disabled"}>Sell</button></div>
     <div class="quick" role="group" aria-label="Quick amounts">${(cq?QUICK_C:QUICK).map(n=>`<button data-quick="${n}">${n}</button>`).join("")}<button data-quick="max" title="${cq?"Most coins your free cash can buy":"Most whole shares your free cash can buy"}" ${priced?"":"disabled"}>Max</button></div>
     <div class="preview" id="pv"></div>
-    ${otype!="market"?`<div class="note ohint">⏱ ${otype=="limit"?"A limit order waits until the price reaches your limit, then fills at that price.":"A stop-loss sells automatically if the price falls to your stop price."} Open orders are checked every 10 seconds <b>only while Finance Desk is running</b>; nothing fills while it is closed.</div>`:""}</div>`:`<div class="empty" style="margin-bottom:16px">Open a stock brief to buy or sell it.</div>`}
+    ${otype!="market"?`<div class="note ohint">⏱ ${otype=="limit"?"A limit order waits until the price reaches your limit, then fills at that price.":"A stop-loss sells automatically if the price falls to your stop price."} ${G?"The competition host checks open orders every minute, the same for every player, even while Finance Desk is closed.":"Open orders are checked every minute, even while Finance Desk is closed."}</div>`:""}</div>`:`<div class="empty" style="margin-bottom:16px">Open a stock brief to buy or sell it.</div>`}
   ${opens.length?`<div class="eyebrow" style="margin-bottom:6px">Open orders</div><ul class="activity" id="opens">${opens.map(o=>`<li><span><span class="otag">${TLABEL[o.type]}</span> <b class="${o.side=="buy"?"up":"down"}">${o.side=="buy"?"Buy":"Sell"}</b> ${fmtQty(o.qty)} ${esc(o.ticker)} ${o.type=="stop"?"if ≤ ":o.side=="buy"?"at ≤ ":"at ≥ "}${usd(o.limit_price??o.stop_price)}</span><button class="btn ghost sm" data-cancel="${esc(o.id)}" aria-label="Cancel ${TLABEL[o.type]} order for ${esc(o.ticker)}">Cancel</button></li>`).join("")}</ul>
-    <div class="note" style="margin:6px 0 16px">Orders fill only while Finance Desk is running.</div>`:""}
+    <div class="note" style="margin:6px 0 16px">Checked every minute, even while Finance Desk is closed.</div>`:""}
   <div class="eyebrow" style="margin-bottom:6px">Positions</div>
   ${p.positions.length?`<table><tr><th>Stock</th><th>Shares</th><th>Value</th><th>P/L</th></tr>${p.positions.map(x=>`<tr><td><a href="#" data-open-pos="${esc(x.ticker)}">${esc(x.ticker)}</a></td><td>${fmtQty(x.qty)}</td><td>${usd(x.market_value)}</td><td class="${cls(x.pnl)}">${signed(x.pnl_pct,v=>v.toFixed(1))}%</td></tr>`).join("")}</table>`:'<div class="empty">No positions yet.</div>'}
   ${recent.length?`<div class="eyebrow" style="margin:16px 0 6px">Recent orders</div><ul class="activity" id="recent">${recent.slice(0,5).map(a=>`<li><span><span class="otag">${TLABEL[a.type||"market"]}</span> <b class="${a.side=="buy"?"up":"down"}">${a.side=="buy"?"Bought":"Sold"}</b> ${fmtQty(a.qty)} ${esc(a.ticker)} @ ${usd(a.price)}</span><span class="muted">${usd(a.price*a.qty)}</span></li>`).join("")}</ul>`:""}
-  <div class="row" style="display:flex;justify-content:space-between;align-items:center;margin-top:16px"><span class="note" style="margin:0">Virtual money · not investment advice</span><button class="btn ghost sm" id="prst">Reset account</button></div>`;
+  <div class="row" style="display:flex;justify-content:space-between;align-items:center;margin-top:16px"><span class="note" style="margin:0">${G?"Ranked on the Leaderboard · filled at the host's price":"Virtual money · not investment advice"}</span>${G?"":'<button class="btn ghost sm" id="prst">Reset account</button>'}</div>`;
   const at=()=>otype=="market"?px:(+($("lpx")?.value||0)||null);
   const maxBuy=()=>{const a=at();return a>0?Math.max(0,cq?Math.floor(p.cash/a*1e6)/1e6:Math.floor(p.cash/a+1e-9)):0};
   const preview=()=>{const q=+($("qty")?.value||0),a=at();qtyVals[qk]=$("qty")?.value||qtyVals[qk];if($("lpx"))lpxVal=$("lpx").value;
@@ -291,26 +313,31 @@ function renderPaper(){if(!feat.paper)return;const p=lastPf;$("paper").hidden=fa
   if($("qty"))$("qty").oninput=preview;if($("lpx"))$("lpx").oninput=preview;
   ["qty","lpx"].forEach(id=>{if($(id))$(id).onblur=()=>setTimeout(()=>{if(heldRender&&!editing())renderPaper()},0)});
   $("pf").onclick=async e=>{
-    const ot=e.target.closest("[data-ot]");if(ot){otype=ot.dataset.ot;renderPaper();return}
+    const sa=e.target.closest("[data-acct]");if(sa){setAcct(sa.dataset.acct);return}
+    const ot=e.target.closest("[data-ot]");if(ot){if(ot.disabled)return;otype=ot.dataset.ot;renderPaper();return}
     const step=e.target.dataset.q;if(step){const i=$("qty"),d=cq?0.01:1;i.value=fmtQty(Math.max(d,Math.round(((+i.value||0)+ +step*d)/d)*d));preview();return}
     const qb=e.target.closest("[data-quick]");if(qb){if(qb.disabled)return;const v=qb.dataset.quick=="max"?maxBuy():+qb.dataset.quick;
       if(!v){toast(cq?"Not enough free cash.":"Not enough cash for even one share.","err");return}$("qty").value=v;preview();return}
     const op=e.target.closest("[data-open-pos]");if(op){e.preventDefault();const b=briefsCache.find(b=>b.ticker==op.dataset.openPos);b?show(b):run(op.dataset.openPos);return}
     const cx=e.target.closest("[data-cancel]");if(cx){cx.disabled=true;
-      try{lastPf=await J(`/paper/orders/${encodeURIComponent(cx.dataset.cancel)}?project_id=${encodeURIComponent(P)}`,{method:"DELETE"});pfSeq++;renderPaper();toast("Order cancelled; its reservation is released.","ok")}
+      try{lastPf=G?await gc("cancel",{order_id:cx.dataset.cancel}):await J(`/paper/orders/${encodeURIComponent(cx.dataset.cancel)}?project_id=${encodeURIComponent(P)}`,{method:"DELETE"});pfSeq++;renderPaper();toast("Order cancelled; its reservation is released.","ok")}
       catch(er){toast(esc(er.message),"err");paperUI()}return}
     const btn=e.target.closest("[data-s]"),s=btn&&btn.dataset.s;
     if(s){if(btn.disabled)return;const qty=+$("qty").value,before=p.cash,a=at();if(!(qty>0)){toast(`Enter how many ${unit}.`,"err");return}
       if(otype!="market"&&!(a>0)){toast(`Enter a ${otype=="limit"?"limit":"stop"} price.`,"err");return}
       const body={project_id:P,ticker:cur.ticker,side:s,qty,type:otype};if(otype=="limit")body.limit_price=a;if(otype=="stop")body.stop_price=a;
       document.querySelectorAll("#pf [data-s]").forEach(b=>b.disabled=true);btn.innerHTML='<span class="spinner"></span>';
-      try{const r=await post("/paper/orders",body);
-        lastPf=r;pfSeq++;renderPaper();lbUI();
-        if(r.pending){const o=r.pending;toast(`⏳ ${TLABEL[o.type]} order placed: ${o.side=="buy"?"buy":"sell"} ${fmtQty(o.qty)} ${esc(o.ticker)} ${o.type=="stop"?"if ≤":o.side=="buy"?"at ≤":"at ≥"} ${usd(o.limit_price??o.stop_price)}<br><span class="muted">It fills only while Finance Desk is running.</span>`,"ok");return}
+      try{const {project_id:_,...gbody}=body,r=G?await gc("order",gbody):await post("/paper/orders",body);
+        lastPf=r;pfSeq++;renderPaper();if(G){competeChanged();window.mobius?.signal?.("item_created",{type:"competition_order"})}else lbUI();
+        if(r.pending){const o=r.pending;toast(`⏳ ${TLABEL[o.type]} order placed${G?" in the competition":""}: ${o.side=="buy"?"buy":"sell"} ${fmtQty(o.qty)} ${esc(o.ticker)} ${o.type=="stop"?"if ≤":o.side=="buy"?"at ≤":"at ≥"} ${usd(o.limit_price??o.stop_price)}<br><span class="muted">Checked every minute, even while Finance Desk is closed.</span>`,"ok");return}
         const f=r.fill;if(!r.recent_orders)localStorage[actKey()]=JSON.stringify([{...f,type:otype},...acts()].slice(0,20));
-        toast(`${s=="buy"?"✅ Bought":"💰 Sold"} ${fmtQty(f.qty)} ${esc(f.ticker)} at ${usd(f.price)}${otype!="market"?" (price already met)":""}<br><span class="muted">Cash ${usd(before)} → <b>${usd(r.cash)}</b></span>`,"ok");
+        toast(`${s=="buy"?"✅ Bought":"💰 Sold"} ${fmtQty(f.qty)} ${esc(f.ticker)} at ${usd(f.price)}${otype!="market"?" (price already met)":""}${G?" in the competition":""}<br><span class="muted">Cash ${usd(before)} → <b>${usd(r.cash)}</b></span>`,"ok");
         const c=$("cashv");if(c){c.style.color=s=="buy"?"var(--down)":"var(--up)";setTimeout(()=>c.style.color="",900)}}
       catch(er){toast(esc(er.message),"err");renderPaper()}}
+    if(e.target.id=="gretry"){lastPf=null;gctx=null;renderPaper();paperUI();return}
+    if(e.target.id=="gjoin"){e.target.disabled=true;
+      try{await gc("join");toast(`🏆 You joined the global competition${gctx?" as <b>"+esc(gctx.handle)+"</b>":""}`,"ok");window.mobius?.signal?.("item_created",{type:"competition_join"});lastPf=null;competeChanged();paperUI()}
+      catch(er){e.target.disabled=false;toast(esc(er.message),"err")}return}
     if(e.target.id=="prst"){if(await modal({title:"Reset your paper account?",text:"All positions, open orders and order history in this workspace are cleared and your cash goes back to $100,000. This workspace also sits out the current leaderboard periods.",confirm:"Reset account",danger:true})){
       lastPf=await post("/paper/reset?project_id="+encodeURIComponent(P),{});pfSeq++;localStorage.removeItem(actKey());renderPaper();lbUI();toast("Paper account reset to $100,000","ok")}}}}
 

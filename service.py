@@ -96,7 +96,8 @@ def route(app: App, method: str, path: str, query: dict, body) -> object:
     key = (method, parts[0] if parts else "", len(parts))
 
     if key == ("GET", "features", 1):
-        return {"paper": True, "learning": True, "live_data": True, "ai": True, "workspace_leaderboard": False}
+        return {"paper": True, "learning": True, "live_data": True, "ai": True, "workspace_leaderboard": False,
+                "competition": True}
     if key == ("GET", "projects", 1):
         return app.desk.projects()
     if key == ("POST", "projects", 1):
@@ -194,6 +195,13 @@ def route(app: App, method: str, path: str, query: dict, body) -> object:
 
     if key == ("DELETE", "paper", 3) and parts[1] == "orders":
         return _dump(app.paper.cancel(pid, parts[2]))
+
+    # --- one-minute schedule (job.sh): fill open limit/stop orders while the app is closed ---
+    if key == ("POST", "jobs", 2) and parts[1] == "sweep":
+        filled = app.paper.check_all()
+        if own_host() == fd_compete.HOST_DEFAULT:
+            filled += app.competition.sweep()
+        return {"filled": filled}
 
     # --- shared competition (player side; this instance may also be the host) ---
     if key == ("GET", "compete", 2) and parts[1] == "context":

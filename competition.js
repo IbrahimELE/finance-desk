@@ -1,6 +1,8 @@
-// "Global competition" card: one $100,000 account per Möbius @handle, kept and priced by the
-// competition host (fd_compete.py). Möbius-only, so it lives here rather than in frontend/index.html;
-// it reuses the desk's classes (card, tabs, lb-row, acct-grid, btn) so it looks native to it.
+// "Global competition" leaderboard: one $100,000 account per Möbius @handle, kept and priced by the
+// competition host (fd_compete.py). This card only ranks players; trading the competition account
+// happens in the Paper trading card (its Competition switch), so there is one order form for both.
+// Events: "fd:account" asks the paper card to switch account; "fd:compete-changed" means a trade or
+// join happened there, so the ranking is refreshed.
 
 const MEDAL = ['🥇', '🥈', '🥉']
 const PERIOD_NAME = { day: 'today', week: 'this week', month: 'this month' }
@@ -14,8 +16,7 @@ const signed = (x, d = 2) => `${Math.abs(x) < 0.005 ? '' : x > 0 ? '+' : ''}${(M
 const rid = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 14)}`)
 
 export function startCompetition({ root, call, every }) {
-  const aside = root.querySelector('aside')
-  aside.insertAdjacentHTML('afterbegin', `
+  root.querySelector('#paper').insertAdjacentHTML('afterend', `
     <div class="card acct" id="gc-card">
       <div class="card-h"><h3>Leaderboard</h3><span class="pill" id="gc-pill">All Möbius players</span></div>
       <div id="gc-body"><div class="loading"><div class="spinner"></div><span class="muted">Connecting to the competition…</span></div></div>
@@ -24,19 +25,10 @@ export function startCompetition({ root, call, every }) {
   const pill = root.querySelector('#gc-pill')
   let ctx = null
   let board = null
-  let account = null
   let period = 'week'
-  let qty = '10'
-  let busy = false
   let seq = 0
 
-  const toast = (msg, kind = '') => {
-    const t = document.createElement('div')
-    t.className = `toast ${kind}`
-    t.innerHTML = msg
-    root.querySelector('#toasts')?.appendChild(t)
-    setTimeout(() => t.remove(), 4200)
-  }
+  const openAccount = () => document.dispatchEvent(new CustomEvent('fd:account', { detail: 'compete' }))
   const act = (action, payload = {}) => call(`/compete/${action}`, { ...payload, request_id: rid() })
 
   async function refresh() {
@@ -44,10 +36,8 @@ export function startCompetition({ root, call, every }) {
     try {
       if (!ctx) ctx = await call('/compete/context')
       const next = await act('standings', { period })
-      const acct = next.joined ? await act('portfolio') : null
       if (mine !== seq) return
       board = next
-      account = acct
       render()
     } catch (err) {
       if (mine !== seq) return
@@ -88,85 +78,24 @@ export function startCompetition({ root, call, every }) {
 
   function render() {
     pill.textContent = `${board.players} player${board.players === 1 ? '' : 's'}`
-    if (!board.joined) {
-      body.innerHTML = `
-        <p style="margin:0 0 12px">Trade a separate <b>$100,000</b> account against every Finance Desk player on Möbius as <b>${esc(ctx.handle)}</b>.</p>
-        <p class="muted" style="margin:0 0 16px;font-size:14px">Orders are filled by the competition host at its own price, and competition accounts can't be reset, so the ranking is fair.</p>
-        <button class="btn primary" id="gc-join" style="width:100%">Join as ${esc(ctx.handle)}</button>
-        <div style="margin-top:20px">${standingsHtml()}</div>`
-      return
-    }
-    const ret = account ? ((account.equity / account.starting_cash) - 1) * 100 : 0
-    const ticker = (root.querySelector('#t')?.value || '').trim().toUpperCase()
-    const positions = account?.positions?.length
-      ? `<table style="margin-top:12px"><tr><th>Stock</th><th>Shares</th><th>Value</th><th>P/L</th></tr>${account.positions.map((p) => `<tr><td>${esc(p.ticker)}</td><td>${p.qty}</td><td>${usd(p.market_value)}</td><td class="${cls(p.pnl)}">${signed(p.pnl_pct, 1)}</td></tr>`).join('')}</table>`
-      : ''
-    body.innerHTML = `
-      <div class="acct-grid" style="margin-top:0">
-        <div><small>Total value</small><b>${usd(account?.equity)}</b></div>
-        <div><small>Return</small><b class="${cls(ret)}">${signed(ret)}</b></div>
-        <div><small>Cash</small><b>${usd(account?.cash)}</b></div>
-        <div><small>Playing as</small><b>${esc(ctx.handle)}</b></div>
-      </div>
-      <form class="trade" id="gc-trade" style="margin-bottom:0">
-        <div class="row" style="margin-bottom:8px">
-          <input class="input" id="gc-ticker" placeholder="Ticker" value="${esc(ticker)}" aria-label="Competition ticker" autocomplete="off" style="flex:1;min-width:0;text-transform:uppercase">
-          <div class="stepper"><button type="button" data-gq="-1" aria-label="Fewer shares">−</button><input id="gc-qty" type="number" min="1" value="${esc(qty)}" aria-label="Shares"><button type="button" data-gq="1" aria-label="More shares">+</button></div>
-        </div>
-        <div class="row"><button class="btn success sm" data-gs="buy" style="flex:1" ${busy ? 'disabled' : ''}>Buy</button><button class="btn danger sm" data-gs="sell" style="flex:1" ${busy ? 'disabled' : ''}>Sell</button></div>
-      </form>
-      ${positions}
-      <div style="margin-top:20px">${standingsHtml()}</div>
-      <div class="note">Ranked by money made in the period. Your competition account is separate from your workspaces, filled at the host's price, with no resets.</div>`
+    const me = board.me
+    const head = !board.joined
+      ? `<p class="muted" style="margin:0 0 12px;font-size:14px">Trade a separate $100,000 account against every Finance Desk player as <b>${esc(ctx.handle)}</b>.</p>
+         <button class="btn primary" data-gopen style="width:100%">Join the competition</button>`
+      : `<div class="lb-you"><span>${me ? `You are <b>#${me.rank}</b> of ${board.ranked} ${PERIOD_NAME[period]}` : `No trades ${PERIOD_NAME[period]} yet`}</span>
+         <button class="btn ghost sm" data-gopen>Trade</button></div>`
+    body.innerHTML = `${head}<div style="margin-top:16px">${standingsHtml()}</div>
+      <div class="note">Ranked by money made in the period. Trade your competition account in Paper trading → Competition.</div>`
   }
 
-  async function trade(side) {
-    const t = (body.querySelector('#gc-ticker')?.value || '').trim().toUpperCase()
-    const n = Number(body.querySelector('#gc-qty')?.value || 0)
-    if (!t || !(n > 0)) { toast('Enter a ticker and how many shares.', 'err'); return }
-    busy = true
-    render()
-    try {
-      account = await act('order', { ticker: t, side, qty: n })
-      const fill = account.fill || {}
-      toast(`${side === 'buy' ? '✅ Bought' : '💰 Sold'} ${esc(fill.qty ?? n)} ${esc(t)} at ${usd(fill.price)} in the competition`, 'ok')
-      window.mobius?.signal?.('item_created', { type: 'competition_order' })
-      busy = false
-      await refresh()
-    } catch (err) {
-      busy = false
-      render()
-      toast(esc(err.message), 'err')
-    }
-  }
-
-  body.addEventListener('click', async (e) => {
+  body.addEventListener('click', (e) => {
     if (e.target.id === 'gc-retry') { body.innerHTML = '<div class="loading"><div class="spinner"></div></div>'; ctx = null; refresh(); return }
-    if (e.target.id === 'gc-join') {
-      e.target.disabled = true
-      try {
-        await act('join')
-        toast(`🏆 You joined the global competition as <b>${esc(ctx.handle)}</b>`, 'ok')
-        window.mobius?.signal?.('item_created', { type: 'competition_join' })
-        await refresh()
-      } catch (err) { e.target.disabled = false; toast(esc(err.message), 'err') }
-      return
-    }
+    if (e.target.closest('[data-gopen]')) { openAccount(); return }
     const tab = e.target.closest('[data-gp]')
-    if (tab && tab.dataset.gp !== period) { period = tab.dataset.gp; refresh(); return }
-    const step = e.target.closest('[data-gq]')
-    if (step) {
-      const input = body.querySelector('#gc-qty')
-      input.value = Math.max(1, (Number(input.value) || 0) + Number(step.dataset.gq))
-      qty = input.value
-      return
-    }
-    const side = e.target.closest('[data-gs]')
-    if (side) { e.preventDefault(); if (!busy) trade(side.dataset.gs) }
+    if (tab && tab.dataset.gp !== period) { period = tab.dataset.gp; refresh() }
   })
-  body.addEventListener('input', (e) => { if (e.target.id === 'gc-qty') qty = e.target.value })
-  body.addEventListener('submit', (e) => e.preventDefault())
+  document.addEventListener('fd:compete-changed', () => refresh())
 
   refresh()
-  every(() => { if (!document.hidden && !busy && !body.contains(document.activeElement)) refresh() }, REFRESH_MS)
+  every(() => { if (!document.hidden) refresh() }, REFRESH_MS)
 }

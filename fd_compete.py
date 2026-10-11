@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Callable
 
 from fd_data.leaderboard import Leaderboard
-from fd_data.paper import JsonPaperStore, OrderIn, PaperService
+from fd_data.paper import JsonPaperStore, OrderIn, OrderNotFound, PaperService
 from fd_data.service import normalize_ticker
 
 HOST_DEFAULT = "mobius-production-ddf2.up.railway.app"
@@ -33,8 +33,11 @@ PROOF_TTL = 120
 DIRECTORY_TTL = 300
 RECEIPT_TTL = 24 * 3600
 TOP = 10  # rows everyone sees; a player outside them also gets their own row and place
-ACTIONS = {"join", "portfolio", "order", "standings"}
-WRITES = {"join", "order"}
+ACTIONS = {"join", "portfolio", "order", "cancel", "standings"}
+WRITES = {"join", "order", "cancel"}
+# Sent with every account answer. Players' apps offer limit/stop only when the host lists them:
+# an older host ignored the order type and would have filled such an order at once at market.
+ORDER_TYPES = ["market", "limit", "stop"]
 
 
 class Refused(Exception):
@@ -141,6 +144,12 @@ class Competition:
             _write_json(receipt, {"stamp": stamp, "result": result})
             return result
 
+    def sweep(self) -> int:
+        """Fill every player's open limit/stop order whose price is met. The host runs this on each
+        standings request and from the app's one-minute schedule, so orders fill for everyone alike,
+        whether or not anybody has Finance Desk open."""
+        return self.paper.check_all()
+
     def _joined(self, pid: str) -> bool:
         return self.paper.store.load(pid) is not None
 
@@ -150,6 +159,7 @@ class Competition:
         if action == "standings":
             period = body.get("period", "day")
             require(period in ("day", "week", "month"), 422, "invalid_parameter", "period must be day, week or month")
+            self.sweep()
             board = self.board.standings(period).model_dump(mode="json")
             # Accounts are stored by handle without "@"; players see handles.
             for row in board["standings"] + board["medals"] + ((board["last_podium"] or {}).get("places") or []):
@@ -160,10 +170,18 @@ class Competition:
                     "medals": board["medals"][:TOP], "joined": self._joined(pid), "players": len(self.paper.store.ids())}
         require(self._joined(pid), 409, "not_joined", "Join the competition first.")
         if action == "portfolio":
-            return self.paper.portfolio(pid).model_dump(mode="json")
+            return {**self.paper.portfolio(pid).model_dump(mode="json"), "order_types": ORDER_TYPES}
+        if action == "cancel":
+            try:
+                return {**self.paper.cancel(pid, str(body.get("order_id", ""))).model_dump(mode="json"),
+                        "order_types": ORDER_TYPES}
+            except OrderNotFound as e:
+                raise Refused(404, "not_found", "That order is no longer open; it may have just filled.") from e
         try:
             order = OrderIn(project_id=pid, ticker=str(body.get("ticker", "")), side=body.get("side"),
-                            qty=body.get("qty"))
+                            qty=body.get("qty"), type=body.get("type") or "market",
+                            limit_price=body.get("limit_price"), stop_price=body.get("stop_price"))
         except Exception as e:
-            raise Refused(422, "invalid_parameter", "Order needs ticker, side buy|sell and qty > 0.") from e
-        return self.paper.place(order, normalize_ticker(order.ticker)).model_dump(mode="json")
+            raise Refused(422, "invalid_parameter",
+                          "Order needs ticker, side buy|sell, qty > 0, and a limit or stop price for those orders.") from e
+        return {**self.paper.place(order, normalize_ticker(order.ticker)).model_dump(mode="json"), "order_types": ORDER_TYPES}
